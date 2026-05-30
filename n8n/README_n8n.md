@@ -1,4 +1,4 @@
-# Native n8n Server Setup Tool v2.0 🚀
+# Native n8n Server Setup Tool v3.0 🚀
 
 ![n8n Banner](/home/b1swa/.gemini/antigravity/brain/935a5dee-7148-4f01-a865-0b32d86fb798/n8n_banner_1780132224151.png)
 

@@ -8,8 +8,27 @@
 # Contact: sandipbiswa10@gmail.com
 # ==============================================================================
 
-# Exit on error
+# Exit on error and catch pipeline failures
 set -e
+set -o pipefail
+
+# Sanitize PATH to prevent user NVM binaries from polluting or breaking global system installation
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export DEBIAN_FRONTEND=noninteractive
+
+# Parse command line options
+SILENT=false
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --silent) SILENT=true; shift ;;
+        *) echo "Unknown parameter passed: $1"; exit 1 ;;
+    esac
+done
+
+# Setup logging
+LOG_FILE="/var/log/n8n_install.log"
+touch "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/n8n_install.log"
+echo "=== n8n Native Setup Started at $(date) ===" > "$LOG_FILE"
 
 # Colors
 RED='\033[0;31m'
@@ -18,13 +37,37 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+# Detect correct user and home directory (handles running directly as root or via sudo)
+REAL_USER="${SUDO_USER:-root}"
+if [ "$REAL_USER" = "root" ]; then
+    USER_HOME="/root"
+else
+    USER_HOME="/home/$REAL_USER"
+fi
+
 # Paths
 N8N_ENV_FILE="/etc/n8n/.env"
 N8N_BACKUP_DIR="/var/backups/n8n"
-N8N_DATA_DIR="/home/${SUDO_USER:-root}/.n8n"
+N8N_DATA_DIR="$USER_HOME/.n8n"
+
+cleanup_on_error() {
+    local exit_code=$?
+    if [ $exit_code -ne 0 ] && [ "$exit_code" -ne 130 ]; then
+        echo -e "\n${RED}❌ Installation failed.${NC}"
+        if [ -f "$LOG_FILE" ]; then
+            echo -e "Please check the log file for details: ${YELLOW}$LOG_FILE${NC}"
+            echo -e "\n${CYAN}--- Last 20 lines of $LOG_FILE ---${NC}"
+            tail -n 20 "$LOG_FILE"
+            echo -e "${CYAN}------------------------------------------------${NC}"
+        fi
+    fi
+}
+trap cleanup_on_error EXIT
 
 # Clear screen
-clear
+if [ "$SILENT" != "true" ]; then
+    clear
+fi
 
 # Check for root
 if [ "$EUID" -ne 0 ]; then
@@ -69,7 +112,9 @@ install_whiptail() {
     fi
 }
 
-install_whiptail
+if [ "$SILENT" != "true" ]; then
+    install_whiptail
+fi
 
 # ==============================================================================
 # NETWORK HELPERS
@@ -103,27 +148,32 @@ show_branding() {
     local HOST_IP=$(detect_current_ip)
     local IFACE=$(detect_interface)
     
-    whiptail --title "Native n8n Installer v2.0 🚀" --msgbox "\
-Welcome to the n8n Workflow Automation Setup!
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    whiptail --title "b1swa | Native n8n Installer v3.0 🚀" --msgbox "Welcome to the n8n Workflow Automation Setup!
 
-Host:       $HOSTNAME
-IP Address: $HOST_IP
+[ System Information ]
+Hostname:   $HOSTNAME
+Host IP:    $HOST_IP
 Interface:  $IFACE
 Distro:     $DISTRO_NAME
 Pkg Mgr:    $PKG_MANAGER
 
+Engine:     Node.js / n8n
+Copyright © b1swa
+Contact:    sandipbiswa10@gmail.com
+
 This tool will configure a production-ready n8n server.
-Press OK to continue." 16 60
+Press OK to continue." 20 65
 }
 
-show_branding
+if [ "$SILENT" != "true" ]; then
+    show_branding
+fi
 
 # ==============================================================================
 # PHASE 1: STATIC IP CONFIGURATION (Optional)
 # ==============================================================================
 STATIC_IP_CONFIGURED="No"
-if whiptail --title "Network: Static IP" --yesno "RECOMMENDED: Do you want to set a Static IP for this server?
+if [ "$SILENT" != "true" ] && whiptail --title "b1swa | Network: Static IP" --yesno "RECOMMENDED: Do you want to set a Static IP for this server?
 
 A static IP ensures your n8n webhooks and access URL never change.
 If you skip this, your current dynamic IP will be used.
@@ -139,10 +189,10 @@ Interface:  $(detect_interface)" 14 65; then
     # Extract just the prefix length
     CURRENT_PREFIX=$(echo "$CURRENT_CIDR" | cut -d'/' -f2)
 
-    STATIC_IP=$(whiptail --title "Static IP: Address" --inputbox "Enter the static IP address for this server:" 10 60 "$CURRENT_IP" 3>&1 1>&2 2>&3)
-    STATIC_PREFIX=$(whiptail --title "Static IP: Subnet Prefix" --inputbox "Enter the subnet prefix length (e.g., 24 for /24 = 255.255.255.0):" 10 60 "$CURRENT_PREFIX" 3>&1 1>&2 2>&3)
-    STATIC_GW=$(whiptail --title "Static IP: Gateway" --inputbox "Enter the default gateway:" 10 60 "$CURRENT_GW" 3>&1 1>&2 2>&3)
-    STATIC_DNS=$(whiptail --title "Static IP: DNS Server" --inputbox "Enter the DNS server (comma-separated for multiple):" 10 60 "$CURRENT_DNS" 3>&1 1>&2 2>&3)
+    STATIC_IP=$(whiptail --title "b1swa | Static IP: Address" --inputbox "Enter the static IP address for this server:" 10 60 "$CURRENT_IP" 3>&1 1>&2 2>&3)
+    STATIC_PREFIX=$(whiptail --title "b1swa | Static IP: Subnet Prefix" --inputbox "Enter the subnet prefix length (e.g., 24 for /24 = 255.255.255.0):" 10 60 "$CURRENT_PREFIX" 3>&1 1>&2 2>&3)
+    STATIC_GW=$(whiptail --title "b1swa | Static IP: Gateway" --inputbox "Enter the default gateway:" 10 60 "$CURRENT_GW" 3>&1 1>&2 2>&3)
+    STATIC_DNS=$(whiptail --title "b1swa | Static IP: DNS Server" --inputbox "Enter the DNS server (comma-separated for multiple):" 10 60 "$CURRENT_DNS" 3>&1 1>&2 2>&3)
 
     # Apply static IP using Netplan (Ubuntu) or nmcli (RHEL/Fedora) or ip (Arch)
     if [ -d /etc/netplan ]; then
@@ -186,47 +236,64 @@ fi
 # ==============================================================================
 # PHASE 2: n8n CONFIGURATION
 # ==============================================================================
-N8N_PORT=$(whiptail --title "Configuration: Port" --inputbox "Enter the port for n8n to listen on (Default: 5678):" 10 60 "5678" 3>&1 1>&2 2>&3)
-if [ -z "$N8N_PORT" ]; then N8N_PORT="5678"; fi
+if [ "$SILENT" = "true" ]; then
+    : "${N8N_PORT:=5678}"
+    : "${N8N_WEBHOOK_URL:=http://$HOST_IP:$N8N_PORT}"
+else
+    N8N_PORT=$(whiptail --title "b1swa | Configuration: Port" --inputbox "Enter the port for n8n to listen on (Default: 5678):" 10 60 "5678" 3>&1 1>&2 2>&3)
+    if [ -z "$N8N_PORT" ]; then N8N_PORT="5678"; fi
 
-N8N_WEBHOOK_URL=$(whiptail --title "Configuration: Webhook URL" --inputbox "Enter the public URL for webhooks:
+    N8N_WEBHOOK_URL=$(whiptail --title "b1swa | Configuration: Webhook URL" --inputbox "Enter the public URL for webhooks:
 
 Examples:
   https://n8n.yourdomain.com
   http://$HOST_IP:$N8N_PORT" 12 70 "http://$HOST_IP:$N8N_PORT" 3>&1 1>&2 2>&3)
-if [ -z "$N8N_WEBHOOK_URL" ]; then N8N_WEBHOOK_URL="http://$HOST_IP:$N8N_PORT"; fi
+    if [ -z "$N8N_WEBHOOK_URL" ]; then N8N_WEBHOOK_URL="http://$HOST_IP:$N8N_PORT"; fi
+fi
 
 # ==============================================================================
 # PHASE 3: DATABASE SELECTION
 # ==============================================================================
-DB_TYPE=$(whiptail --title "Database Backend" --menu "Select the database for n8n to use:
-
-SQLite  = Simple, zero-config (good for testing)
-Postgres = Recommended for production (durable, scalable)" 15 65 2 \
-    "sqlite" "SQLite (Default - No extra setup)" \
-    "postgres" "PostgreSQL (Recommended for production)" \
-    3>&1 1>&2 2>&3)
-
 DB_POSTGRESDB_HOST=""
 DB_POSTGRESDB_PORT=""
 DB_POSTGRESDB_DATABASE=""
 DB_POSTGRESDB_USER=""
 DB_POSTGRESDB_PASSWORD=""
 
-if [ "$DB_TYPE" = "postgres" ]; then
-    if whiptail --title "PostgreSQL: Install?" --yesno "Do you want this script to install PostgreSQL locally?
+if [ "$SILENT" = "true" ]; then
+    : "${DB_TYPE:=sqlite}"
+    : "${INSTALL_POSTGRES:=false}"
+    if [ "$DB_TYPE" = "postgres" ]; then
+        : "${DB_POSTGRESDB_HOST:=localhost}"
+        : "${DB_POSTGRESDB_PORT:=5432}"
+        : "${DB_POSTGRESDB_DATABASE:=n8n}"
+        : "${DB_POSTGRESDB_USER:=n8n}"
+        : "${DB_POSTGRESDB_PASSWORD:=n8npass}"
+    fi
+else
+    DB_TYPE=$(whiptail --title "b1swa | Database Backend" --menu "Select the database for n8n to use:
+
+SQLite  = Simple, zero-config (good for testing)
+Postgres = Recommended for production (durable, scalable)" 15 65 2 \
+        "sqlite" "SQLite (Default - No extra setup)" \
+        "postgres" "PostgreSQL (Recommended for production)" \
+        3>&1 1>&2 2>&3)
+
+    if [ "$DB_TYPE" = "postgres" ]; then
+        if whiptail --title "b1swa | PostgreSQL: Install?" --yesno "Do you want this script to install PostgreSQL locally?
 
 Select 'No' if PostgreSQL is already running on this or another machine." 10 65; then
-        INSTALL_POSTGRES="true"
-    else
-        INSTALL_POSTGRES="false"
-    fi
+            INSTALL_POSTGRES="true"
+        else
+            INSTALL_POSTGRES="false"
+        fi
 
-    DB_POSTGRESDB_HOST=$(whiptail --title "PostgreSQL: Host" --inputbox "Database host:" 10 60 "localhost" 3>&1 1>&2 2>&3)
-    DB_POSTGRESDB_PORT=$(whiptail --title "PostgreSQL: Port" --inputbox "Database port:" 10 60 "5432" 3>&1 1>&2 2>&3)
-    DB_POSTGRESDB_DATABASE=$(whiptail --title "PostgreSQL: Database" --inputbox "Database name:" 10 60 "n8n" 3>&1 1>&2 2>&3)
-    DB_POSTGRESDB_USER=$(whiptail --title "PostgreSQL: User" --inputbox "Database user:" 10 60 "n8n" 3>&1 1>&2 2>&3)
-    DB_POSTGRESDB_PASSWORD=$(whiptail --title "PostgreSQL: Password" --passwordbox "Database password:" 10 60 3>&1 1>&2 2>&3)
+        DB_POSTGRESDB_HOST=$(whiptail --title "b1swa | PostgreSQL: Host" --inputbox "Database host:" 10 60 "localhost" 3>&1 1>&2 2>&3)
+        DB_POSTGRESDB_PORT=$(whiptail --title "b1swa | PostgreSQL: Port" --inputbox "Database port:" 10 60 "5432" 3>&1 1>&2 2>&3)
+        DB_POSTGRESDB_DATABASE=$(whiptail --title "b1swa | PostgreSQL: Database" --inputbox "Database name:" 10 60 "n8n" 3>&1 1>&2 2>&3)
+        DB_POSTGRESDB_USER=$(whiptail --title "b1swa | PostgreSQL: User" --inputbox "Database user:" 10 60 "n8n" 3>&1 1>&2 2>&3)
+        DB_POSTGRESDB_PASSWORD=$(whiptail --title "b1swa | PostgreSQL: Password" --passwordbox "Database password:" 10 60 3>&1 1>&2 2>&3)
+    fi
 fi
 
 # ==============================================================================
@@ -236,12 +303,20 @@ N8N_BASIC_AUTH_ACTIVE="false"
 N8N_BASIC_AUTH_USER=""
 N8N_BASIC_AUTH_PASSWORD=""
 
-if whiptail --title "Security: Basic Auth" --yesno "Do you want to enable Basic Authentication for the n8n web interface?
+if [ "$SILENT" = "true" ]; then
+    : "${N8N_BASIC_AUTH_ACTIVE:=false}"
+    if [ "$N8N_BASIC_AUTH_ACTIVE" = "true" ]; then
+        : "${N8N_BASIC_AUTH_USER:=admin}"
+        : "${N8N_BASIC_AUTH_PASSWORD:=adminpass}"
+    fi
+else
+    if whiptail --title "b1swa | Security: Basic Auth" --yesno "Do you want to enable Basic Authentication for the n8n web interface?
 
 This adds a login prompt before anyone can access n8n." 10 65; then
-    N8N_BASIC_AUTH_ACTIVE="true"
-    N8N_BASIC_AUTH_USER=$(whiptail --title "Basic Auth" --inputbox "Enter a username:" 10 60 "admin" 3>&1 1>&2 2>&3)
-    N8N_BASIC_AUTH_PASSWORD=$(whiptail --title "Basic Auth" --passwordbox "Enter a password:" 10 60 3>&1 1>&2 2>&3)
+        N8N_BASIC_AUTH_ACTIVE="true"
+        N8N_BASIC_AUTH_USER=$(whiptail --title "b1swa | Basic Auth: Username" --inputbox "Enter a username:" 10 60 "admin" 3>&1 1>&2 2>&3)
+        N8N_BASIC_AUTH_PASSWORD=$(whiptail --title "b1swa | Basic Auth: Password" --passwordbox "Enter a password:" 10 60 3>&1 1>&2 2>&3)
+    fi
 fi
 
 # ==============================================================================
@@ -249,12 +324,20 @@ fi
 # ==============================================================================
 ENABLE_BACKUP="false"
 BACKUP_CRON=""
-if whiptail --title "Backup: Auto-Backup" --yesno "Do you want to enable automatic daily backups of your n8n data?
+
+if [ "$SILENT" = "true" ]; then
+    : "${ENABLE_BACKUP:=false}"
+    if [ "$ENABLE_BACKUP" = "true" ]; then
+        : "${BACKUP_CRON:=02:00}"
+    fi
+else
+    if whiptail --title "b1swa | Backup: Auto-Backup" --yesno "Do you want to enable automatic daily backups of your n8n data?
 
 Backups will be stored at: $N8N_BACKUP_DIR
 Retention: Last 7 days" 12 65; then
-    ENABLE_BACKUP="true"
-    BACKUP_CRON=$(whiptail --title "Backup: Schedule" --inputbox "Enter the backup time (24h format, e.g., 02:00 for 2 AM):" 10 60 "02:00" 3>&1 1>&2 2>&3)
+        ENABLE_BACKUP="true"
+        BACKUP_CRON=$(whiptail --title "b1swa | Backup: Schedule" --inputbox "Enter the backup time (24h format, e.g., 02:00 for 2 AM):" 10 60 "02:00" 3>&1 1>&2 2>&3)
+    fi
 fi
 
 # ==============================================================================
@@ -265,7 +348,17 @@ N8N_DOMAIN=""
 ENABLE_SSL="false"
 SSL_EMAIL=""
 
-if whiptail --title "Reverse Proxy: Nginx" --yesno "Do you want to set up Nginx as a reverse proxy?
+if [ "$SILENT" = "true" ]; then
+    : "${ENABLE_PROXY:=false}"
+    : "${ENABLE_SSL:=false}"
+    if [ "$ENABLE_PROXY" = "true" ]; then
+        : "${N8N_DOMAIN:=$HOST_IP}"
+        if [ "$ENABLE_SSL" = "true" ]; then
+            : "${SSL_EMAIL:=admin@example.com}"
+        fi
+    fi
+else
+    if whiptail --title "b1swa | Reverse Proxy: Nginx" --yesno "Do you want to set up Nginx as a reverse proxy?
 
 This is RECOMMENDED if you plan to:
   - Use a domain name (e.g., n8n.yourdomain.com)
@@ -273,31 +366,36 @@ This is RECOMMENDED if you plan to:
   - Hide the port number from the URL
 
 If you skip this, n8n will be accessed directly via IP:Port." 16 65; then
-    ENABLE_PROXY="true"
-    N8N_DOMAIN=$(whiptail --title "Reverse Proxy: Domain" --inputbox "Enter the domain or subdomain for n8n:
+        ENABLE_PROXY="true"
+        N8N_DOMAIN=$(whiptail --title "b1swa | Reverse Proxy: Domain" --inputbox "Enter the domain or subdomain for n8n:
 
 (Use the server IP if you don't have a domain)" 12 60 "$HOST_IP" 3>&1 1>&2 2>&3)
-    if [ -z "$N8N_DOMAIN" ]; then N8N_DOMAIN="$HOST_IP"; fi
+        if [ -z "$N8N_DOMAIN" ]; then N8N_DOMAIN="$HOST_IP"; fi
 
-    if whiptail --title "SSL: Let's Encrypt" --yesno "Do you want to enable FREE SSL (HTTPS) via Let's Encrypt?
+        if whiptail --title "b1swa | SSL: Let's Encrypt" --yesno "Do you want to enable FREE SSL (HTTPS) via Let's Encrypt?
 
 Requirements:
   - A valid domain name pointing to this server
   - Port 80 and 443 must be accessible from the internet
 
 Note: This will NOT work with a raw IP address." 14 65; then
-        ENABLE_SSL="true"
-        SSL_EMAIL=$(whiptail --title "SSL: Email" --inputbox "Enter your email for Let's Encrypt certificate notifications:" 10 60 "" 3>&1 1>&2 2>&3)
+            ENABLE_SSL="true"
+            SSL_EMAIL=$(whiptail --title "b1swa | SSL: Email" --inputbox "Enter your email for Let's Encrypt certificate notifications:" 10 60 "" 3>&1 1>&2 2>&3)
+        fi
     fi
 fi
 
 # ==============================================================================
 # PHASE 7: PERFORMANCE TUNING
 # ==============================================================================
-N8N_MEMORY_LIMIT=$(whiptail --title "Performance: Memory Limit" --inputbox "Set a maximum memory limit for n8n (PM2 will auto-restart if exceeded).
+if [ "$SILENT" = "true" ]; then
+    : "${N8N_MEMORY_LIMIT:=1G}"
+else
+    N8N_MEMORY_LIMIT=$(whiptail --title "b1swa | Performance: Memory Limit" --inputbox "Set a maximum memory limit for n8n (PM2 will auto-restart if exceeded).
 
 Examples: 512M, 1G, 2G
 Leave blank for no limit:" 12 60 "1G" 3>&1 1>&2 2>&3)
+fi
 
 # ==============================================================================
 # REVIEW & CONFIRM
@@ -333,20 +431,29 @@ REVIEW_TEXT="Ready to install n8n?
 
 Press Yes to begin automated setup."
 
-whiptail --title "Review Configuration" --yesno "$REVIEW_TEXT" 28 60 || exit 0
+if [ "$SILENT" != "true" ]; then
+    whiptail --title "b1swa | Review Configuration" --yesno "$REVIEW_TEXT" 28 60 || exit 0
+fi
 
 # ==============================================================================
 # AUTOMATED INSTALLATION
 # ==============================================================================
-{
+run_installation() {
     echo 2; sleep 1
     echo "XXX"
     echo "📦 Phase 1/11: Installing Dependencies..."
     echo "XXX"
     case $PKG_MANAGER in
-        apt) apt-get update -y > /dev/null && apt-get install -y curl wget gnupg2 > /dev/null ;;
-        dnf|yum) $PKG_MANAGER install -y curl wget > /dev/null ;;
-        pacman) pacman -Sy --noconfirm curl wget > /dev/null ;;
+        apt)
+            apt-get update -y >> "$LOG_FILE" 2>&1
+            apt-get install -y curl wget gnupg2 >> "$LOG_FILE" 2>&1
+            ;;
+        dnf|yum)
+            $PKG_MANAGER install -y curl wget >> "$LOG_FILE" 2>&1
+            ;;
+        pacman)
+            pacman -Sy --noconfirm curl wget >> "$LOG_FILE" 2>&1
+            ;;
     esac
 
     echo 10; sleep 1
@@ -356,15 +463,15 @@ whiptail --title "Review Configuration" --yesno "$REVIEW_TEXT" 28 60 || exit 0
     if ! command -v node &> /dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 18 ]]; then
         case $PKG_MANAGER in
             apt)
-                curl -fsSL https://deb.nodesource.com/setup_20.x | bash - > /dev/null 2>&1
-                apt-get install -y nodejs > /dev/null
+                curl -fsSL https://deb.nodesource.com/setup_20.x 2>> "$LOG_FILE" | bash - >> "$LOG_FILE" 2>&1
+                apt-get install -y nodejs >> "$LOG_FILE" 2>&1
                 ;;
             dnf|yum)
-                curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - > /dev/null 2>&1
-                $PKG_MANAGER install -y nodejs > /dev/null
+                curl -fsSL https://rpm.nodesource.com/setup_20.x 2>> "$LOG_FILE" | bash - >> "$LOG_FILE" 2>&1
+                $PKG_MANAGER install -y nodejs >> "$LOG_FILE" 2>&1
                 ;;
             pacman)
-                pacman -Sy --noconfirm nodejs npm > /dev/null
+                pacman -Sy --noconfirm nodejs npm >> "$LOG_FILE" 2>&1
                 ;;
         esac
     fi
@@ -375,24 +482,36 @@ whiptail --title "Review Configuration" --yesno "$REVIEW_TEXT" 28 60 || exit 0
     echo "XXX"
     if [ "$DB_TYPE" = "postgres" ] && [ "$INSTALL_POSTGRES" = "true" ]; then
         case $PKG_MANAGER in
-            apt) apt-get install -y postgresql postgresql-contrib > /dev/null ;;
-            dnf|yum) $PKG_MANAGER install -y postgresql-server postgresql-contrib > /dev/null && postgresql-setup --initdb > /dev/null 2>&1 || true ;;
-            pacman) pacman -Sy --noconfirm postgresql > /dev/null && su - postgres -c "initdb --locale en_US.UTF-8 -D /var/lib/postgres/data" > /dev/null 2>&1 || true ;;
+            apt)
+                apt-get install -y postgresql postgresql-contrib >> "$LOG_FILE" 2>&1
+                ;;
+            dnf|yum)
+                $PKG_MANAGER install -y postgresql-server postgresql-contrib >> "$LOG_FILE" 2>&1
+                postgresql-setup --initdb >> "$LOG_FILE" 2>&1 || true
+                ;;
+            pacman)
+                pacman -Sy --noconfirm postgresql >> "$LOG_FILE" 2>&1
+                su - postgres -c "initdb --locale en_US.UTF-8 -D /var/lib/postgres/data" >> "$LOG_FILE" 2>&1 || true
+                ;;
         esac
-        systemctl enable postgresql > /dev/null 2>&1
-        systemctl start postgresql > /dev/null 2>&1
+        systemctl enable postgresql >> "$LOG_FILE" 2>&1
+        systemctl start postgresql >> "$LOG_FILE" 2>&1
 
         # Create DB and User
-        sudo -u postgres psql -c "CREATE USER $DB_POSTGRESDB_USER WITH PASSWORD '$DB_POSTGRESDB_PASSWORD';" > /dev/null 2>&1 || true
-        sudo -u postgres psql -c "CREATE DATABASE $DB_POSTGRESDB_DATABASE OWNER $DB_POSTGRESDB_USER;" > /dev/null 2>&1 || true
-        sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_POSTGRESDB_DATABASE TO $DB_POSTGRESDB_USER;" > /dev/null 2>&1 || true
+        sudo -u postgres psql -c "CREATE USER $DB_POSTGRESDB_USER WITH PASSWORD '$DB_POSTGRESDB_PASSWORD';" >> "$LOG_FILE" 2>&1 || true
+        sudo -u postgres psql -c "CREATE DATABASE $DB_POSTGRESDB_DATABASE OWNER $DB_POSTGRESDB_USER;" >> "$LOG_FILE" 2>&1 || true
+        sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_POSTGRESDB_DATABASE TO $DB_POSTGRESDB_USER;" >> "$LOG_FILE" 2>&1 || true
     fi
 
     echo 30; sleep 1
     echo "XXX"
     echo "☁️  Phase 4/11: Installing n8n & PM2..."
     echo "XXX"
-    npm install -g n8n pm2 > /dev/null 2>&1
+    npm install -g n8n pm2 >> "$LOG_FILE" 2>&1
+
+    # Detect absolute paths of newly installed pm2 and n8n to avoid any PATH issues
+    PM2_PATH=$(command -v pm2 || echo "/usr/bin/pm2")
+    N8N_PATH=$(command -v n8n || echo "/usr/bin/n8n")
 
     echo 40; sleep 1
     echo "XXX"
@@ -443,36 +562,45 @@ EOF
     echo "⚙️  Phase 6/11: Configuring PM2 Service..."
     echo "XXX"
     
-    # Create a start script that loads the env file
-    cat <<'STARTEOF' > /usr/local/bin/start_n8n.sh
+    # Create a start script that loads the env file and runs n8n using absolute path
+    cat <<STARTEOF > /usr/local/bin/start_n8n.sh
 #!/bin/bash
 # Load environment variables from the n8n config file
 set -a
 source /etc/n8n/.env
 set +a
-exec $(command -v n8n)
+exec $N8N_PATH
 STARTEOF
     chmod +x /usr/local/bin/start_n8n.sh
 
-    # Stop any existing n8n process
-    sudo -u ${SUDO_USER:-root} pm2 delete n8n > /dev/null 2>&1 || pm2 delete n8n > /dev/null 2>&1 || true
+    # Stop any existing n8n process using absolute PM2 path and correct user context
+    sudo -u $REAL_USER $PM2_PATH delete n8n >> "$LOG_FILE" 2>&1 || $PM2_PATH delete n8n >> "$LOG_FILE" 2>&1 || true
 
     # Start n8n under PM2 (with optional memory limit)
     PM2_ARGS="--name n8n"
     if [ -n "$N8N_MEMORY_LIMIT" ]; then
         PM2_ARGS="$PM2_ARGS --max-memory-restart $N8N_MEMORY_LIMIT"
     fi
-    sudo -u ${SUDO_USER:-root} pm2 start /usr/local/bin/start_n8n.sh $PM2_ARGS > /dev/null 2>&1 || pm2 start /usr/local/bin/start_n8n.sh $PM2_ARGS > /dev/null 2>&1
-    sudo -u ${SUDO_USER:-root} pm2 save > /dev/null 2>&1 || pm2 save > /dev/null 2>&1
+    sudo -u $REAL_USER $PM2_PATH start /usr/local/bin/start_n8n.sh $PM2_ARGS >> "$LOG_FILE" 2>&1 || $PM2_PATH start /usr/local/bin/start_n8n.sh $PM2_ARGS >> "$LOG_FILE" 2>&1
+    sudo -u $REAL_USER $PM2_PATH save >> "$LOG_FILE" 2>&1 || $PM2_PATH save >> "$LOG_FILE" 2>&1
 
     # Setup PM2 log rotation
-    sudo -u ${SUDO_USER:-root} pm2 install pm2-logrotate > /dev/null 2>&1 || pm2 install pm2-logrotate > /dev/null 2>&1 || true
-    sudo -u ${SUDO_USER:-root} pm2 set pm2-logrotate:max_size 10M > /dev/null 2>&1 || true
-    sudo -u ${SUDO_USER:-root} pm2 set pm2-logrotate:retain 7 > /dev/null 2>&1 || true
-    sudo -u ${SUDO_USER:-root} pm2 set pm2-logrotate:compress true > /dev/null 2>&1 || true
+    sudo -u $REAL_USER $PM2_PATH install pm2-logrotate >> "$LOG_FILE" 2>&1 || $PM2_PATH install pm2-logrotate >> "$LOG_FILE" 2>&1 || true
+    sudo -u $REAL_USER $PM2_PATH set pm2-logrotate:max_size 10M >> "$LOG_FILE" 2>&1 || true
+    sudo -u $REAL_USER $PM2_PATH set pm2-logrotate:retain 7 >> "$LOG_FILE" 2>&1 || true
+    sudo -u $REAL_USER $PM2_PATH set pm2-logrotate:compress true >> "$LOG_FILE" 2>&1 || true
 
-    # Setup PM2 to start on system boot
-    env PATH=$PATH:/usr/bin pm2 startup systemd -u ${SUDO_USER:-root} --hp /home/${SUDO_USER:-root} > /dev/null 2>&1 || true
+    # Setup PM2 to start on system boot and ensure daemon is enabled/running
+    env PATH=$PATH:/usr/bin $PM2_PATH startup systemd -u $REAL_USER --hp $USER_HOME >> "$LOG_FILE" 2>&1 || true
+    
+    # Add a sleep delay to prevent systemd from checking PID file before PM2 daemon writes it
+    if [ -f "/etc/systemd/system/pm2-$REAL_USER.service" ]; then
+        sed -i '/ExecStart=/a ExecStartPost=/bin/sleep 2' "/etc/systemd/system/pm2-$REAL_USER.service" || true
+    fi
+
+    systemctl daemon-reload >> "$LOG_FILE" 2>&1 || true
+    systemctl enable pm2-$REAL_USER.service >> "$LOG_FILE" 2>&1 || true
+    systemctl start pm2-$REAL_USER.service >> "$LOG_FILE" 2>&1 || true
 
     echo 58; sleep 1
     echo "XXX"
@@ -506,9 +634,9 @@ STARTEOF
     echo "XXX"
     if [ "$ENABLE_PROXY" = "true" ]; then
         case $PKG_MANAGER in
-            apt) apt-get install -y nginx > /dev/null ;;
-            dnf|yum) $PKG_MANAGER install -y nginx > /dev/null ;;
-            pacman) pacman -Sy --noconfirm nginx > /dev/null ;;
+            apt) apt-get install -y nginx >> "$LOG_FILE" 2>&1 ;;
+            dnf|yum) $PKG_MANAGER install -y nginx >> "$LOG_FILE" 2>&1 ;;
+            pacman) pacman -Sy --noconfirm nginx >> "$LOG_FILE" 2>&1 ;;
         esac
 
         # Determine Nginx config path
@@ -541,13 +669,13 @@ NGINXEOF
 
         # Enable site (Debian/Ubuntu style)
         if [ -d /etc/nginx/sites-enabled ]; then
-            ln -sf /etc/nginx/sites-available/n8n /etc/nginx/sites-enabled/n8n > /dev/null 2>&1
-            rm -f /etc/nginx/sites-enabled/default > /dev/null 2>&1 || true
+            ln -sf /etc/nginx/sites-available/n8n /etc/nginx/sites-enabled/n8n >> "$LOG_FILE" 2>&1
+            rm -f /etc/nginx/sites-enabled/default >> "$LOG_FILE" 2>&1 || true
         fi
 
-        nginx -t > /dev/null 2>&1
-        systemctl enable nginx > /dev/null 2>&1
-        systemctl restart nginx > /dev/null 2>&1
+        nginx -t >> "$LOG_FILE" 2>&1
+        systemctl enable nginx >> "$LOG_FILE" 2>&1
+        systemctl restart nginx >> "$LOG_FILE" 2>&1
     fi
 
     echo 78; sleep 1
@@ -556,12 +684,12 @@ NGINXEOF
     echo "XXX"
     if [ "$ENABLE_SSL" = "true" ]; then
         case $PKG_MANAGER in
-            apt) apt-get install -y certbot python3-certbot-nginx > /dev/null ;;
-            dnf) dnf install -y certbot python3-certbot-nginx > /dev/null ;;
-            yum) yum install -y certbot python3-certbot-nginx > /dev/null ;;
-            pacman) pacman -Sy --noconfirm certbot certbot-nginx > /dev/null ;;
+            apt) apt-get install -y certbot python3-certbot-nginx >> "$LOG_FILE" 2>&1 ;;
+            dnf) dnf install -y certbot python3-certbot-nginx >> "$LOG_FILE" 2>&1 ;;
+            yum) yum install -y certbot python3-certbot-nginx >> "$LOG_FILE" 2>&1 ;;
+            pacman) pacman -Sy --noconfirm certbot certbot-nginx >> "$LOG_FILE" 2>&1 ;;
         esac
-        certbot --nginx -d "$N8N_DOMAIN" --non-interactive --agree-tos -m "$SSL_EMAIL" --redirect > /dev/null 2>&1 || true
+        certbot --nginx -d "$N8N_DOMAIN" --non-interactive --agree-tos -m "$SSL_EMAIL" --redirect >> "$LOG_FILE" 2>&1 || true
     fi
 
     echo 85; sleep 1
@@ -591,32 +719,34 @@ BACKUPEOF
     if [ "$ENABLE_BACKUP" = "true" ]; then
         BACKUP_HOUR=$(echo "$BACKUP_CRON" | cut -d: -f1)
         BACKUP_MIN=$(echo "$BACKUP_CRON" | cut -d: -f2)
-        (crontab -l 2>/dev/null | grep -v "n8n_backup"; echo "$BACKUP_MIN $BACKUP_HOUR * * * /usr/local/bin/n8n_backup.sh >> /var/log/n8n_backup.log 2>&1") | crontab -
+        (crontab -l 2>/dev/null | grep -v "n8n_backup" || true; echo "$BACKUP_MIN $BACKUP_HOUR * * * /usr/local/bin/n8n_backup.sh >> /var/log/n8n_backup.log 2>&1") | crontab -
     fi
 
-    # Create an update helper script
-    cat <<'UPDATEEOF' > /usr/local/bin/n8n_update.sh
+    # Create an update helper script targeting the correct PM2 user context and absolute path
+    cat <<UPDATEEOF > /usr/local/bin/n8n_update.sh
 #!/bin/bash
 # n8n Update Helper
 echo "🔄 Stopping n8n..."
-pm2 stop n8n
+sudo -u $REAL_USER $PM2_PATH stop n8n
 echo "📦 Updating n8n..."
 npm update -g n8n
 echo "🚀 Restarting n8n..."
-pm2 restart n8n
-echo "✅ n8n updated to $(n8n --version 2>/dev/null || echo 'latest')!"
+sudo -u $REAL_USER $PM2_PATH restart n8n
+echo "✅ n8n updated to \$(n8n --version 2>/dev/null || echo 'latest')!"
 UPDATEEOF
     chmod +x /usr/local/bin/n8n_update.sh
 
-    # Create uninstall script
+    # Create uninstall script targeting the correct PM2 user context and absolute path with non-interactive force option
     cat <<UNINSTALLEOF > /usr/local/bin/n8n_uninstall.sh
 #!/bin/bash
 if [ "\$EUID" -ne 0 ]; then echo "Please run with sudo."; exit 1; fi
 echo "⚠️  This will completely remove n8n from this system."
-read -p "Are you sure? (y/N): " confirm
-if [ "\$confirm" != "y" ] && [ "\$confirm" != "Y" ]; then echo "Cancelled."; exit 0; fi
+if [ "\$1" != "-y" ] && [ "\$FORCE" != "true" ]; then
+    read -p "Are you sure? (y/N): " confirm
+    if [ "\$confirm" != "y" ] && [ "\$confirm" != "Y" ]; then echo "Cancelled."; exit 0; fi
+fi
 echo "Stopping n8n..."
-pm2 stop n8n 2>/dev/null; pm2 delete n8n 2>/dev/null; pm2 save 2>/dev/null
+sudo -u $REAL_USER $PM2_PATH stop n8n 2>/dev/null; sudo -u $REAL_USER $PM2_PATH delete n8n 2>/dev/null; sudo -u $REAL_USER $PM2_PATH save 2>/dev/null
 echo "Removing n8n & PM2..."
 npm uninstall -g n8n pm2 2>/dev/null
 echo "Removing config files..."
@@ -625,7 +755,7 @@ rm -f /usr/local/bin/n8n_update.sh /usr/local/bin/n8n_backup.sh /usr/local/bin/n
 echo "Removing Nginx config..."
 rm -f /etc/nginx/sites-available/n8n /etc/nginx/sites-enabled/n8n /etc/nginx/conf.d/n8n.conf 2>/dev/null
 systemctl restart nginx 2>/dev/null || true
-echo "\n✅ n8n has been removed. Your data remains at ~/.n8n/ and backups at /var/backups/n8n/"
+echo -e "\n✅ n8n has been removed. Your data remains at ~/.n8n/ and backups at /var/backups/n8n/"
 UNINSTALLEOF
     chmod +x /usr/local/bin/n8n_uninstall.sh
 
@@ -639,7 +769,17 @@ UNINSTALLEOF
     echo "XXX"
     echo "✅ Setup Complete!"
     echo "XXX"
-} | whiptail --title "Installation Progress" --gauge "Initializing..." 10 70 0
+}
+
+echo -e "${CYAN}ℹ️  Installation logs are being saved in real-time to: ${YELLOW}$LOG_FILE${NC}"
+echo -e "${CYAN}ℹ️  To monitor progress live, open a new terminal and run: ${GREEN}tail -f $LOG_FILE${NC}\n"
+sleep 2
+
+if [ "$SILENT" = "true" ]; then
+    run_installation
+else
+    run_installation | whiptail --title "b1swa | Installation Progress" --gauge "Initializing..." 10 70 0
+fi
 
 # ==============================================================================
 # FINAL SUMMARY
@@ -686,7 +826,9 @@ FINAL_MSG="n8n Server is now LIVE!
 Access n8n: $ACCESS_URL
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-whiptail --title "🎉 Success!" --msgbox "$FINAL_MSG" 30 60
+if [ "$SILENT" != "true" ]; then
+    whiptail --title "b1swa | 🎉 Success!" --msgbox "$FINAL_MSG" 30 60
+fi
 
 clear
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"

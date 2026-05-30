@@ -43,6 +43,21 @@ class N8NDocPDF(FPDF):
         self.multi_cell(0, 6, text, new_x="LMARGIN", new_y="NEXT", align="J")
         self.ln(2)
 
+    def add_figure(self, img_path, fig_num, caption, w=110, h=52):
+        if os.path.exists(img_path):
+            self.ln(2)
+            x = (210 - w) / 2
+            img_y = self.get_y()
+            if img_y + h + 15 > 297:
+                self.add_page()
+                img_y = self.get_y()
+            self.image(img_path, x=x, y=img_y, w=w, h=h)
+            self.set_y(img_y + h + 1)
+            self.set_font("helvetica", "I", 8.5)
+            self.set_text_color(100, 100, 100)
+            self.cell(0, 5, f"Fig. {fig_num}: {caption}", align="C", new_x="LMARGIN", new_y="NEXT")
+            self.ln(4)
+
     def add_code_block(self, code_lines):
         self.set_font("courier", "", 9)
         self.set_fill_color(245, 245, 245)
@@ -89,6 +104,14 @@ pdf.set_auto_page_break(auto=True, margin=15)
 pdf.add_page()
 pdf.set_fill_color(24, 28, 36) # Cyberpunk dark background
 pdf.rect(0, 0, 210, 297, "F")
+
+# Centered Logo on cover page (above title)
+logo_path = "logo.png"
+if not os.path.exists(logo_path):
+    logo_path = "/home/b1swa/Documents/n8n/logo.png"
+
+if os.path.exists(logo_path):
+    pdf.image(logo_path, x=82.5, y=25, w=45)
 
 # Title Accents
 pdf.set_fill_color(0, 180, 216) # Neon blue accent bar
@@ -147,13 +170,14 @@ toc_items = [
     ("2. Concept Dictionary & Plain English Analogies", "Page 3"),
     ("3. Architecture Overview & Prerequisites", "Page 4"),
     ("4. Step-by-Step Installation Guide", "Page 5"),
-    ("5. Interactive Menu & Parameter Map", "Page 6"),
-    ("6. Configuration & Static IP Specifications", "Page 7"),
-    ("7. Database Backend Comparison & PM2 Management", "Page 8"),
-    ("8. Reverse Proxy, SSL, & Security Best Practices", "Page 9"),
-    ("9. Backup, Recovery, & Firewall Configuration", "Page 10"),
-    ("10. Troubleshooting & Service Operations", "Page 11"),
-    ("11. FAQ, File Reference, & Uninstallation", "Page 12")
+    ("5. Interactive Configuration Wizard Walkthrough", "Page 6"),
+    ("6. Configuration Reference & Static IP Details", "Page 8"),
+    ("7. Database Backends & PM2 Process Management", "Page 9"),
+    ("8. Reverse Proxy, SSL & Security Best Practices", "Page 10"),
+    ("9. Backup, Recovery & Firewall Configuration", "Page 11"),
+    ("10. System Debugging & Service Operations", "Page 12"),
+    ("11. Web UI Onboarding & Initial Configuration", "Page 13"),
+    ("12. FAQ, File Reference, & Uninstallation", "Page 15")
 ]
 
 for title, page in toc_items:
@@ -271,39 +295,102 @@ pdf.add_bullet("Phase 10 - Helper scripts", "Creates helper scripts under /usr/l
 pdf.add_bullet("Phase 11 - Completion", "Purges installer temp files, validates that the PM2 daemon is running, and prints details.")
 
 # ==============================================================================
-# PAGE 6: INTERACTIVE MENU & PARAMETER MAP
+# PAGES 6-13: CHAPTER 5 - INTERACTIVE CONFIGURATION WIZARD WALKTHROUGH
 # ==============================================================================
 pdf.add_page()
-pdf.chapter_title("5", "Interactive Menu & Parameter Map")
+pdf.chapter_title("5", "Interactive Configuration Wizard Walkthrough")
 
-pdf.add_paragraph("The installation script setup_n8n_native.sh uses whiptail, a console-based GUI dialog box system. It queries the administrator through graphic terminal dialog screens to avoid typos and validate network settings. Below is the mapping of all variables collected by the menus:")
+pdf.add_paragraph("The installation script setup_n8n_native.sh uses whiptail, a console-based GUI dialog box system. It queries the administrator through graphical terminal dialog screens to collect and validate setup parameters. Below is the step-by-step walkthrough of the configuration wizard:")
 
-# Menu Parameter Table
-pdf.set_font("helvetica", "B", 10)
-pdf.cell(40, 6, "Collected Variable", border=1, align="L", new_x="RIGHT", new_y="TOP")
-pdf.cell(35, 6, "Prompt Menu Type", border=1, align="L", new_x="RIGHT", new_y="TOP")
-pdf.cell(55, 6, "Options & Default Values", border=1, align="L", new_x="RIGHT", new_y="TOP")
-pdf.cell(60, 6, "Target Location", border=1, align="L", new_x="LMARGIN", new_y="NEXT")
-pdf.set_font("helvetica", "", 8.5)
-
-menu_items = [
-    ("IP configuration", "whiptail --menu", "DHCP (Dynamic IP) / Static IP address", "Netplan or nmcli settings"),
-    ("Database Backend", "whiptail --menu", "SQLite (File) / PostgreSQL (Daemon)", "/etc/n8n/.env (DB_TYPE)"),
-    ("PostgreSQL Secrets", "whiptail --passwordbox", "PostgreSQL database admin password", "/etc/n8n/.env (DB_PASSWORD)"),
-    ("Domain Name (FQDN)", "whiptail --inputbox", "Target web domain (e.g. n8n.domain.com)", "/etc/nginx/sites-enabled/n8n"),
-    ("Server Listener Port", "whiptail --inputbox", "Default listening port (Default: 5678)", "/etc/n8n/.env (N8N_PORT)"),
-    ("Enable daily backups", "whiptail --yesno", "Yes (Activates cron at 2 AM) / No", "/etc/cron.d/n8n_backup")
+wizard_steps = [
+    ("1", "Welcome & System Information", "Displays the installer version, copyright/branding details, and detects key server metadata (hostname, IP address, active network interface, and detected Linux distribution)."),
+    ("2", "Static IP: Selection Box", "Asks whether you want to set a Static IP for the server. A static IP ensures your webhook URLs and server access path never change."),
+    ("3", "Configuration: Listener Port", "Allows setting a custom port for the n8n application to listen on. Defaults to 5678."),
+    ("4", "Configuration: Webhook URL", "Allows configuring the public-facing URL where external service webhooks (e.g. GitHub, Slack) will send trigger events."),
+    ("5", "PostgreSQL: Install Option", "Asks whether the script should install and configure a local PostgreSQL database server, or connect to an external one."),
+    ("6", "PostgreSQL: Database Host", "Specifies the hostname or IP address of the PostgreSQL database server (defaults to localhost)."),
+    ("7", "PostgreSQL: Database Port", "Specifies the network port for connecting to the PostgreSQL server (defaults to 5432)."),
+    ("8", "PostgreSQL: Database Name", "Specifies the database name that n8n will create and use (defaults to n8n)."),
+    ("9", "PostgreSQL: Database Username", "Specifies the database username used to connect to PostgreSQL (defaults to n8n)."),
+    ("10", "PostgreSQL: Database Password", "Secure password input field to set or specify the password for the database user."),
+    ("11", "Security: Basic Authentication", "Asks whether you want to enable Basic Authentication, prompting users for a username/password before loading the n8n dashboard."),
+    ("12", "Basic Auth: Username", "Input field to define the basic authentication username (defaults to admin)."),
+    ("13", "Basic Auth: Password Box", "Secure password input field to set the password for basic authentication."),
+    ("14", "Backup: Auto-Backup option", "Prompts to enable automated daily backups of n8n configurations and data folders to /var/backups/n8n/."),
+    ("15", "Backup: Cron Schedule", "Specifies the daily backup time in 24-hour format (defaults to 02:00 for 2 AM)."),
+    ("16", "Reverse Proxy: Nginx Option", "Asks whether you want to install and configure Nginx as a reverse proxy, mapping public traffic (ports 80/443) to n8n's backend port."),
+    ("17", "Reverse Proxy: Domain name", "Input field for the domain or subdomain name (e.g. n8n.yourdomain.com) or fallback IP address."),
+    ("18", "SSL: Let's Encrypt Option", "Asks whether to run Certbot to retrieve a free Let's Encrypt SSL certificate and configure HTTPS redirect."),
+    ("19", "SSL: Administrator Email", "Input field for your email address to receive renewal notifications and alerts from Let's Encrypt."),
+    ("20", "Performance: Memory Limit", "Sets a memory guard limit (e.g. 1G) after which PM2 will automatically restart the n8n daemon to prevent leaks."),
+    ("21", "Configuration Review Summary", "Displays a complete summary of all collected network, database, security, and backup configurations for final validation."),
+    ("22", "Installation Success Screen", "Displays the completion message with server status, access URLs, and maintenance helper commands.")
 ]
 
-for var, menu, opts, target in menu_items:
-    pdf.cell(40, 6, var, border=1, align="L", new_x="RIGHT", new_y="TOP")
-    pdf.cell(35, 6, menu, border=1, align="L", new_x="RIGHT", new_y="TOP")
-    pdf.cell(55, 6, opts, border=1, align="L", new_x="RIGHT", new_y="TOP")
-    pdf.cell(60, 6, target, border=1, align="L", new_x="LMARGIN", new_y="NEXT")
-pdf.ln(5)
+# Step 1
+pdf.set_font("helvetica", "B", 10.5)
+pdf.set_text_color(0, 119, 182)
+pdf.cell(0, 6, "Step 1: Welcome & Environment Detection", new_x="LMARGIN", new_y="NEXT")
+pdf.ln(0.5)
+pdf.add_paragraph("The installer detects baseline server metadata including hostname, IP, and Linux distribution. [Tip: Verify the detected network interface is correct before proceeding.]")
 
-pdf.add_paragraph("Future Screenshot Integration:")
-pdf.add_paragraph("An image illustrating the interactive terminal selection box will be placed here to help visual learners orient themselves during initial boot.")
+# Fig 1
+pdf.add_figure("/home/b1swa/Documents/n8n/Image/1.png", 1, "Terminal Welcome & Environment Detection Dialog.", w=110, h=46)
+
+steps_page6 = [
+    ("2", "Static IP Choice", "Asks if you want to configure a Static IP for the server. Recommended to ensure permanent webhook access."),
+    ("3", "Listener Port", "Sets a custom port for the n8n application (defaults to 5678)."),
+    ("4", "Webhook URL", "Configures the public-facing domain or IP used by external services to send webhook triggers."),
+    ("5", "PostgreSQL Option", "Option to configure a local PostgreSQL database server, or link to an external instance."),
+    ("6", "DB Host", "Hostname/IP of the database server (defaults to localhost)."),
+    ("7", "DB Port", "Network port for database connection (defaults to 5432)."),
+    ("8", "DB Name", "The PostgreSQL database name for n8n (defaults to n8n)."),
+    ("9", "DB Username", "Database username used to log in (defaults to n8n)."),
+    ("10", "DB Password", "Password input to authenticate with the database.")
+]
+
+for num, title, desc in steps_page6:
+    pdf.set_font("helvetica", "B", 10.5)
+    pdf.set_text_color(0, 119, 182)
+    pdf.cell(0, 6, f"Step {num}: {title}", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(0.5)
+    pdf.add_paragraph(desc)
+
+steps_page7 = [
+    ("11", "Security: Basic Authentication", "Asks whether you want to enable Basic Authentication, prompting users for a username/password before loading the n8n dashboard."),
+    ("12", "Basic Auth: Username", "Input field to define the basic authentication username (defaults to admin)."),
+    ("13", "Basic Auth: Password Box", "Secure password input field to set the password for basic authentication."),
+    ("14", "Backup: Auto-Backup option", "Prompts to enable automated daily backups of n8n configurations and data folders to /var/backups/n8n/."),
+    ("15", "Backup: Cron Schedule", "Specifies the daily backup time in 24-hour format (defaults to 02:00 for 2 AM)."),
+    ("16", "Reverse Proxy: Nginx Option", "Asks whether you want to install and configure Nginx as a reverse proxy, mapping public traffic (ports 80/443) to n8n's backend port."),
+    ("17", "Reverse Proxy: Domain name", "Input field for the domain or subdomain name (e.g. n8n.yourdomain.com) or fallback IP address."),
+    ("18", "SSL: Let's Encrypt Option", "Asks whether to run Certbot to retrieve a free Let's Encrypt SSL certificate and configure HTTPS redirect."),
+    ("19", "SSL: Administrator Email", "Input field for your email address to receive renewal notifications and alerts from Let's Encrypt."),
+    ("20", "Performance: Memory Limit", "Sets a memory guard limit (e.g. 1G) after which PM2 will automatically restart the n8n daemon to prevent leaks.")
+]
+
+for num, title, desc in steps_page7:
+    pdf.set_font("helvetica", "B", 10.5)
+    pdf.set_text_color(0, 119, 182)
+    pdf.cell(0, 6, f"Step {num}: {title}", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(0.5)
+    pdf.add_paragraph(desc)
+
+# Step 21 & Fig 2
+pdf.set_font("helvetica", "B", 10.5)
+pdf.set_text_color(0, 119, 182)
+pdf.cell(0, 6, "Step 21: Configuration Review Summary", new_x="LMARGIN", new_y="NEXT")
+pdf.ln(0.5)
+pdf.add_paragraph("Displays a complete summary of all collected network, database, security, and backup configurations for final validation before starting the installation.")
+pdf.add_figure("/home/b1swa/Documents/n8n/Image/21.png", 2, "Installation Parameter Summary & Review.", w=110, h=46)
+
+# Step 22 & Fig 3
+pdf.set_font("helvetica", "B", 10.5)
+pdf.set_text_color(0, 119, 182)
+pdf.cell(0, 6, "Step 22: Installation Success Screen", new_x="LMARGIN", new_y="NEXT")
+pdf.ln(0.5)
+pdf.add_paragraph("Displays the completion message with server status, access URLs, and maintenance helper commands.")
+pdf.add_figure("/home/b1swa/Documents/n8n/Image/22.png", 3, "Completion Output and Access Details.", w=110, h=46)
 
 # ==============================================================================
 # PAGE 7: CONFIGURATION REFERENCE & STATIC IP SPECIFICATIONS
@@ -481,16 +568,61 @@ pdf.add_bullet("Node Environment Info", "Confirm baseline language dependencies 
 pdf.add_bullet("DB Connection Refused", "Ensure the DB service is active and check the DB host/user credentials in /etc/n8n/.env.")
 
 # ==============================================================================
-# PAGE 12: FAQ, FILE REFERENCE, & UNINSTALLATION
+# CHAPTER 11 - WEB UI ONBOARDING & INITIAL CONFIGURATION
 # ==============================================================================
 pdf.add_page()
-pdf.chapter_title("11", "FAQ, File Reference, & Uninstallation")
+pdf.chapter_title("11", "Web UI Onboarding & Initial Configuration")
+pdf.add_paragraph("Once the server installation is complete, the remaining configuration is performed via the web browser. Below is the step-by-step onboarding walkthrough:")
+
+# Step 23 & Fig 4
+pdf.set_font("helvetica", "B", 10.5)
+pdf.set_text_color(0, 119, 182)
+pdf.cell(0, 6, "Step 23: Owner Account Creation", new_x="LMARGIN", new_y="NEXT")
+pdf.ln(0.5)
+pdf.add_paragraph("Upon first visiting your n8n URL, you will be prompted to create the primary administrator/owner account. Provide your email, name, and a strong password. This credential set is stored securely in the local database.")
+pdf.add_figure("/home/b1swa/Documents/n8n/Image/23.png", 4, "Web Browser Initial Admin User Registration.", w=70, h=80)
+
+# Steps 24, 25
+pdf.set_font("helvetica", "B", 10.5)
+pdf.set_text_color(0, 119, 182)
+pdf.cell(0, 6, "Step 24: Personalization Questionnaire", new_x="LMARGIN", new_y="NEXT")
+pdf.ln(0.5)
+pdf.add_paragraph("n8n asks a series of optional onboarding questions regarding your automation role, department, and company size to customize template recommendations.")
+
+pdf.set_font("helvetica", "B", 10.5)
+pdf.set_text_color(0, 119, 182)
+pdf.cell(0, 6, "Step 25: Community/Free License Key Modal", new_x="LMARGIN", new_y="NEXT")
+pdf.ln(0.5)
+pdf.add_paragraph("A modal popup offers to activate a free license key. This unlocks advanced node features and triggers. You can register your email to retrieve this key instantly.")
+
+# Step 26 & Fig 5
+pdf.set_font("helvetica", "B", 10.5)
+pdf.set_text_color(0, 119, 182)
+pdf.cell(0, 6, "Step 26: Main Dashboard & Workspace", new_x="LMARGIN", new_y="NEXT")
+pdf.ln(0.5)
+pdf.add_paragraph("The primary n8n canvas. Here you can start building, importing, or testing workflow automations and integrations.")
+pdf.add_figure("/home/b1swa/Documents/n8n/Image/26.png", 5, "Loaded n8n Visual Automation Canvas.", w=80, h=80)
+
+# Step 27
+pdf.set_font("helvetica", "B", 10.5)
+pdf.set_text_color(0, 119, 182)
+pdf.cell(0, 6, "Step 27: License Key Verification Email", new_x="LMARGIN", new_y="NEXT")
+pdf.ln(0.5)
+pdf.add_paragraph("An automated confirmation email containing your personal activation link and registration verification is sent to the registered address.")
+
+# ==============================================================================
+# PAGE 22: CHAPTER 12 - FAQ, FILE REFERENCE, & UNINSTALLATION
+# ==============================================================================
+pdf.add_page()
+pdf.chapter_title("12", "FAQ, File Reference, & Uninstallation")
 
 pdf.set_font("helvetica", "B", 12)
 pdf.cell(0, 8, "Frequently Asked Questions (FAQ)", new_x="LMARGIN", new_y="NEXT")
 pdf.set_font("helvetica", "", 9.5)
 pdf.add_bullet("Q: Can I change database backends?", "Yes. Export workflows via the admin panel, change DB parameters in /etc/n8n/.env, and re-import.")
 pdf.add_bullet("Q: How do I upgrade n8n version?", "Execute 'sudo n8n_update.sh'. The script automatically stops the daemon, downloads the latest npm package, and restarts the engine.")
+pdf.add_bullet("Q: Why does Certbot fail or show a warning with my server's IP address?", "Let's Encrypt only issues SSL certificates for registered domain names (e.g. n8n.domain.com). It does not issue certificates for bare IP addresses (e.g. 10.225.157.51). In this case, Nginx will fallback to serving n8n over standard HTTP on port 80.")
+pdf.add_bullet("Q: How do I verify n8n and Nginx are fully online?", "You can test the HTTP response codes directly using curl: 'curl -I http://localhost:5678' (n8n port) and 'curl -I http://localhost' (Nginx port). Both should return an 'HTTP/1.1 200 OK' response code.")
 
 pdf.set_font("helvetica", "B", 12)
 pdf.cell(0, 8, "Uninstalling the native setup", new_x="LMARGIN", new_y="NEXT")
@@ -518,5 +650,6 @@ for fpath, fdesc in file_refs:
 pdf.ln(5)
 
 # Save the PDF output
-pdf.output("/home/b1swa/Documents/8n8 /n8n_deployment_guide.pdf")
+pdf.output("/home/b1swa/b1swa_SerConfig/8n8 /n8n_deployment_guide.pdf")
+pdf.output("/home/b1swa/Documents/n8n/n8n_deployment_guide.pdf")
 print("PDF COMPLETED AND SAVED")
